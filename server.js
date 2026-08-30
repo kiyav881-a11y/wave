@@ -10,6 +10,7 @@ const PORT = process.env.PORT || 3000;
 
 const PIXEL_ID = "2262195624324094";
 const META_ACCESS_TOKEN = process.env.META_ACCESS_TOKEN;
+const META_TEST_EVENT_CODE = process.env.META_TEST_EVENT_CODE;
 const META_API_VERSION = "v23.0";
 
 // ========================================
@@ -203,6 +204,9 @@ app.get("/:id", async (req, res) => {
           }
         ]
       };
+      if (META_TEST_EVENT_CODE) {
+  eventData.test_event_code = META_TEST_EVENT_CODE;
+      }
 
       const metaResponse = await fetch(
         `https://graph.facebook.com/${META_API_VERSION}/${PIXEL_ID}/events?access_token=${encodeURIComponent(
