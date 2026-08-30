@@ -4,87 +4,174 @@ const links = require("./links.json");
 const app = express();
 const PORT = process.env.PORT || 3000;
 
+// ========================================
+// META CONFIG
+// ========================================
+
 const PIXEL_ID = "2262195624324094";
 const META_ACCESS_TOKEN = process.env.META_ACCESS_TOKEN;
-
-// Meta Graph API version
 const META_API_VERSION = "v23.0";
+
+// ========================================
+// HELPERS
+// ========================================
 
 function cleanId(value) {
   return String(value || "").replace(/^\/+|\/+$/g, "");
 }
 
+function getFirst(value) {
+  if (Array.isArray(value)) {
+    return value[0] || "";
+  }
+
+  return String(value || "").split(",")[0].trim();
+}
+
+function createEventId() {
+  return (
+    "wa_" +
+    Date.now() +
+    "_" +
+    Math.random().toString(36).substring(2, 12)
+  );
+}
+
+// ========================================
+// HOME
+// ========================================
+
 app.get("/", (req, res) => {
-  res.type("html").send(`
-    <h2>WhatsApp Link Redirector</h2>
-    <p>Use a link like <code>/MGmsg1</code></p>
+  res.status(200).type("html").send(`
+    <!DOCTYPE html>
+    <html>
+      <head>
+        <title>WhatsApp Link Redirector</title>
+      </head>
+      <body>
+        <h2>WhatsApp Link Redirector</h2>
+        <p>Use a link like <code>/MGmsg1</code></p>
+      </body>
+    </html>
   `);
 });
 
+// ========================================
+// WHATSAPP REDIRECT + META CAPI
+// ========================================
+
 app.get("/:id", async (req, res) => {
-  try {
-    const id = cleanId(req.params.id);
-    const item = links[id];
+  const id = cleanId(req.params.id);
+  const item = links[id];
 
-    if (!item || !item.number) {
-      return res.status(404).send("Link not found");
+  // ----------------------------------------
+  // Check link
+  // ----------------------------------------
+
+  if (!item || !item.number) {
+    return res.status(404).send("Link not found");
+  }
+
+  const number = String(item.number).replace(/\D/g, "");
+  const message = item.message ? String(item.message) : "";
+
+  const whatsappUrl =
+    "https://wa.me/" +
+    number +
+    (message ? "?text=" + encodeURIComponent(message) : "");
+
+  // ----------------------------------------
+  // Tracking parameters
+  // ----------------------------------------
+
+  const utmSource = String(req.query.utm_source || "");
+  const utmMedium = String(req.query.utm_medium || "");
+  const utmCampaign = String(req.query.utm_campaign || "");
+  const utmContent = String(req.query.utm_content || "");
+  const utmTerm = String(req.query.utm_term || "");
+
+  const fbclid = String(req.query.fbclid || "");
+
+  // ----------------------------------------
+  // Facebook Click ID (_fbc)
+  // ----------------------------------------
+
+  let fbc = "";
+
+  if (fbclid) {
+    fbc = `fb.1.${Date.now()}.${fbclid}`;
+  }
+
+  // ----------------------------------------
+  // Facebook Browser ID (_fbp)
+  // ----------------------------------------
+
+  let fbp =
+    String(req.query._fbp || "") ||
+    String(req.headers["x-fbp"] || "");
+
+  // If cookie exists
+  if (!fbp && req.headers.cookie) {
+    const cookieMatch = req.headers.cookie.match(
+      /(?:^|;\s*)_fbp=([^;]+)/
+    );
+
+    if (cookieMatch) {
+      fbp = cookieMatch[1];
     }
+  }
 
-    const number = String(item.number).replace(/\D/g, "");
-    const message = item.message ? String(item.message) : "";
+  // ----------------------------------------
+  // Request information
+  // ----------------------------------------
 
-    const whatsappUrl =
-      "https://wa.me/" +
-      number +
-      (message ? "?text=" + encodeURIComponent(message) : "");
+  const clientIp =
+    getFirst(req.headers["x-forwarded-for"]) ||
+    req.socket.remoteAddress ||
+    "";
 
-    // --------------------------------
-    // Tracking parameters
-    // --------------------------------
+  const userAgent = req.headers["user-agent"] || "";
 
-    const utmSource = String(req.query.utm_source || "");
-    const utmMedium = String(req.query.utm_medium || "");
-    const utmCampaign = String(req.query.utm_campaign || "");
-    const utmContent = String(req.query.utm_content || "");
-    const utmTerm = String(req.query.utm_term || "");
-    const fbclid = String(req.query.fbclid || "");
+  // ----------------------------------------
+  // Event ID
+  // ----------------------------------------
 
-    // --------------------------------
-    // Facebook click ID (_fbc)
-    // --------------------------------
+  const eventId = createEventId();
 
-    let fbc = "";
+  // ----------------------------------------
+  // Event Source URL
+  // ----------------------------------------
 
-    if (fbclid) {
-      fbc = `fb.1.${Date.now()}.${fbclid}`;
-    }
+  const protocol =
+    req.headers["x-forwarded-proto"] || "https";
 
-    // --------------------------------
-    // Request information
-    // --------------------------------
+  const host =
+    req.headers["x-forwarded-host"] ||
+    req.headers.host ||
+    "";
 
-    const clientIp =
-      req.headers["x-forwarded-for"]?.split(",")[0]?.trim() ||
-      req.socket.remoteAddress ||
-      "";
+  const eventSourceUrl =
+    `${protocol}://${host}/${id}`;
 
-    const userAgent = req.headers["user-agent"] || "";
+  // ----------------------------------------
+  // Meta CAPI
+  // ----------------------------------------
 
-    // --------------------------------
-    // Unique Event ID
-    // --------------------------------
+  if (META_ACCESS_TOKEN) {
+    try {
+      const userData = {
+        client_ip_address: clientIp,
+        client_user_agent: userAgent
+      };
 
-    const eventId =
-      "wa_" +
-      Date.now() +
-      "_" +
-      Math.random().toString(36).substring(2, 12);
+      if (fbc) {
+        userData.fbc = fbc;
+      }
 
-    // --------------------------------
-    // Meta CAPI Event
-    // --------------------------------
+      if (fbp) {
+        userData.fbp = fbp;
+      }
 
-    if (META_ACCESS_TOKEN) {
       const eventData = {
         data: [
           {
@@ -96,17 +183,14 @@ app.get("/:id", async (req, res) => {
 
             action_source: "website",
 
-            event_source_url: `https://${req.headers.host}/${id}`,
+            event_source_url: eventSourceUrl,
 
-            user_data: {
-              client_ip_address: clientIp,
-              client_user_agent: userAgent,
-
-              ...(fbc ? { fbc: fbc } : {})
-            },
+            user_data: userData,
 
             custom_data: {
               link_id: id,
+
+              whatsapp_number: number,
 
               utm_source: utmSource,
               utm_medium: utmMedium,
@@ -137,43 +221,39 @@ app.get("/:id", async (req, res) => {
 
       const metaResult = await metaResponse.json();
 
-      console.log("Meta CAPI status:", metaResponse.status);
-      console.log("Meta CAPI response:", metaResult);
-    } else {
-      console.error("META_ACCESS_TOKEN is missing");
+      console.log("=================================");
+      console.log("Meta CAPI Status:", metaResponse.status);
+      console.log("Meta CAPI Response:", metaResult);
+      console.log("Event ID:", eventId);
+      console.log("Link ID:", id);
+      console.log("=================================");
+
+    } catch (metaError) {
+      // Meta failure should NEVER stop WhatsApp redirect
+      console.error(
+        "Meta CAPI Error:",
+        metaError.message || metaError
+      );
     }
-
-    // --------------------------------
-    // Direct WhatsApp Redirect
-    // --------------------------------
-
-    return res.redirect(302, whatsappUrl);
-
-  } catch (error) {
-    console.error("Redirect/CAPI error:", error);
-
-    // Even if Meta API fails,
-    // still send user to WhatsApp.
-
-    const id = cleanId(req.params.id);
-    const item = links[id];
-
-    if (item && item.number) {
-      const number = String(item.number).replace(/\D/g, "");
-      const message = item.message ? String(item.message) : "";
-
-      const whatsappUrl =
-        "https://wa.me/" +
-        number +
-        (message ? "?text=" + encodeURIComponent(message) : "");
-
-      return res.redirect(302, whatsappUrl);
-    }
-
-    return res.status(500).send("Something went wrong");
+  } else {
+    console.error(
+      "META_ACCESS_TOKEN is missing in Vercel Environment Variables"
+    );
   }
+
+  // ----------------------------------------
+  // Redirect to WhatsApp
+  // ----------------------------------------
+
+  return res.redirect(302, whatsappUrl);
 });
 
+// ========================================
+// START SERVER
+// ========================================
+
 app.listen(PORT, () => {
-  console.log("Server running on port " + PORT);
+  console.log(
+    `WhatsApp Link Redirector running on port ${PORT}`
+  );
 });
