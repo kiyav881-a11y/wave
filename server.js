@@ -176,7 +176,7 @@ app.get("/:id", async (req, res) => {
       const eventData = {
         data: [
           {
-            event_name: "WhatsAppClick",
+            event_name: "Lead",
 
             event_time: Math.floor(Date.now() / 1000),
 
